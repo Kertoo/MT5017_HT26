@@ -1,0 +1,385 @@
+---
+title: "Theory of Statistical Inference (MT5017) <br> (H & B, Chapter 6)"
+author: "Martin Sköld (Translated by Piotr Chlebicki)"
+output:
+  ioslides_presentation:
+    #logo: SU_logo_CMYK.png
+    incremental: no
+    css: slides.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+handout <- FALSE
+```
+```{r, echo = handout}
+# Data and preparation
+
+set.seed(1) # For reproduction
+
+# Airconditioning, time between errors (from Cox, D.R. and Snell, E.J. (1981))
+ac <- c(90, 10, 60, 186, 61, 49, 14, 24, 56, 20, 79, 84, 44, 59, 29, 118, 25, 156, 310, 76, 26, 44, 23, 62, 130, 208, 70, 101)
+
+# Transforming Rs dataframe "trees" to correct units
+trees2 <- trees
+colnames(trees2) <- c("Diameter", "Height", "Volume")
+trees2 <- transform(trees2, Radius = Diameter / 39.37 / 2) # Tum till meter
+trees2 <- transform(trees2, Height = Height / 3.28) # Feet to meters
+trees2 <- transform(trees2, Volume = Volume / 3.28^3) # Cubic feet to cubic meters
+trees2 <- subset(trees2, select = -Diameter) # Remove the Diameter
+
+```
+
+```{r, echo = handout}
+## Functions
+
+# Weibull-likelihood
+L.weib <- Vectorize( # Making elementwise calculations possible
+  function(alpha, beta, data){
+    # Calculates the likelihood given a vector of observations from a Weibull (alpha, beta) distribution
+    # Argument:
+    #     (alpha, beta): parameter values (also vectors)
+    #     data: observation vector
+    # output:
+    #     Likelihood values in alpha and beta
+    L.out <- prod(dweibull(data, shape = alpha, scale = 1 / beta))
+    if (is.nan(L.out))
+      L.out <- 0
+    
+    L.out
+  }, vectorize.args = c("alpha", "beta"))
+l.weib <- Vectorize( # Making elementwise calculations possible
+  function(alpha, beta, data){
+    # Calculates the log-likelihood given a vector of observations from a Weibull (alpha, beta) distribution
+    # Argument:
+    #     (alpha, beta): parameter values (also vectors)
+    #     data: observation vector
+    # output:
+    #     loglikelihood values in alpha and beta
+    l.out <- sum(dweibull(data, shape = alpha, scale = 1 / beta, log = TRUE))
+    
+    l.out
+  }, vectorize.args = c("alpha", "beta"))
+# Score vector for Weibull-likelihood
+S.weib <- function(alpha, beta, data){
+    # Calculates the scorevector given a vector of observations from a Weibull (alpha, beta) distribution
+    # Argument:
+    #     (alpha, beta): parameter values (also vectors)
+    #     data: observation vector
+    # output:
+    #     The score vector
+    S.out <- c(sum(1 / alpha+log(data * beta) * (1 - (data * beta)^alpha)),
+               alpha * sum(1 - (data * beta)^alpha) / beta)
+    
+    S.out
+}
+# Fisher information for Weibull-likelihood
+I.weib <- function(alpha, beta, data){
+    # Calculates the Fisher information matrix given a vector of observations from a Weibull (alpha, beta) distribution
+    # Argument:
+    #     (alpha, beta): parameter values (also vectors)
+    #     data: observation vector
+    # output:
+    #     The fisher information matrix
+    I11 <- sum(1 / alpha^2 + log(data * beta)^2 * (data * beta)^alpha)
+    I12 <- sum((data * beta)^alpha + alpha * log(data * beta) * (data * beta)^alpha - 1) / beta
+    I22 <- alpha * sum((alpha - 1) * (data * beta)^alpha + 1) / beta^2
+    I.out<-cbind(c(I11, I12), c(I12, I22))
+    
+    return(I.out)}
+# Likelihood for the model Volume_i = beta*Height_i * Radius_i^2 + epsilon_i
+# with epsilon_i being i.i.d. Normal(0, sigma2)
+P_trees <- Vectorize(
+  function(beta, sigma2, data){
+    # Calculates likelihood in the regression model
+    # Argument:
+    #     (beta, sigma2): parameter values (also vectors)
+    #     data: a data.frame containing variables Volumem Radius, Height
+    # Utdata:
+    #     Likelihood values im (beta, sigma2)
+    #    
+    L.out <- with(data, prod(dnorm(Volume, beta * Radius^2 * Height, sd = sqrt(sigma2)))) / sigma2
+    
+    L.out
+  }, vectorize.args = c("beta", "sigma2")
+)
+```
+
+## Frequentist and Subjective Probability
+
+Let $A$ denote an event; $P(A)$ is:
+
+- **Frequentist**: The event $A$ is a possible outcome of a repeatable random experiment; $P(A)$ is obtained as the empirical proportion of experiments in which $A$ occurs.
+
+- **Subjective**: $P(A)$ is a personal measure of how likely it is that $A$ will occur.
+
+## Frequentist and Bayesian Statistics
+
+We want to make a statement about the value of an unknown parameter $\theta_0\in\Theta$
+
+- **Frequentist**: Before observing the data, I only know that $\theta_0\in\Theta$.
+
+- **Bayesian**: Before observing the data, my knowledge about the value of $\theta_0$ can be described by a probability density function $p_\theta(\cdot)$, the *prior distribution*.
+
+## Frequentist and Bayesian Statistics
+
+We want to make a statement about the value of the unknown parameter $\theta_0\in\Theta$ after observing $x$, a realization of $X\sim P_{\theta_0}$
+
+- **Frequentist**: My estimate of $\theta_0$ is $\hat{\theta}(x)$, and the uncertainty in my method is described by $\hat{\theta}(X)$, where $X\sim P_\theta$.
+
+- **Bayesian**: My knowledge of the value of $\theta_0$ is now updated to the conditional density $p_{\theta|X}(\cdot|x)$ for $\theta|X=x$, the *posterior distribution*.
+
+## Bayes Theorem
+
+If we interpret $p_{X|\theta}(x|\theta)$ as the conditional density of $X|\theta$, we can determine the posterior distribution
+
+$$
+p_{\theta|X}(\cdot|x)=\frac{p_{X|\theta}(x|\cdot)p_\theta(\cdot)}{p_X(x)}\propto p_{X|\theta}(x|\cdot)p_\theta(\cdot)
+$$
+
+## Example: Quality control prior distribution
+
+```{r, echo = handout}
+theta <- seq(0, .3, length.out = 1000)
+plot(theta, dbeta(theta, 2, 30), type = "l", yaxs = "i", xaxs = "i", ylim = c(0, 18),
+     xlab = expression(theta), ylab = expression(p(theta)))
+abline(v = 0.1, lty = 3)
+```
+
+## Example: Quality control posterior distribution
+
+```{r, echo = handout}
+theta <- seq(0, .3, length.out = 1000)
+plot(theta, dbeta(theta, 5, 77), type = "l", yaxs="i", xaxs = "i", ylim = c(0, 18),
+     xlab = expression(theta), ylab = expression(paste("p(", theta, "|", x, ")")))
+lines(theta, dbeta(theta, 2, 30), lty = 2)
+abline(v = 0.1, lty = 3)
+```
+
+## Example: Quality control 
+
+$P(\theta>0.1)$
+```{r, echo = TRUE}
+1 - pbeta(0.1, 2, 30)
+```
+
+
+$P(\theta>0.1|X=3)$
+```{r, echo = TRUE}
+1 - pbeta(0.1, 5, 77)
+```
+
+
+## Examample: Lifespans prior distribution
+
+```{r, echo = handout}
+theta <- seq(0, .03, length.out = 1000)
+plot(theta, dgamma(theta, 2, 100), type = "l",
+     xlab = expression(theta), ylab = expression(paste("p(", theta, "|", x, ")")))
+```
+
+## Examample: Lifespans posterior distribution
+
+```{r, echo = handout}
+theta <- seq(0, .03, length.out = 1000)
+plot(theta, dgamma(theta, 30, sum(ac) + 100), type = "l",
+     xlab = expression(theta), ylab = expression(paste("p(", theta, "|", x, ")")))
+lines(theta, dgamma(theta, 2, 100), lty = 2)
+```
+
+## Examample: Lifespans, central tendency
+
+```{r, echo = handout}
+theta <- seq(0, .03, length.out = 1000)
+plot(theta, dgamma(theta, 30, sum(ac) + 100), type = "l",
+     xlab = expression(theta), ylab = expression(paste("p(", theta, "|", x, ")")))
+mean <- 30 / (sum(ac) + 100)
+median <- qgamma(0.5, 30, sum(ac) + 100)
+mode <- 29 / (sum(ac) + 100)
+abline(v = mean, lty = 1)
+abline(v = median, lty = 2)
+abline(v = mode, lty = 3)
+```
+
+## Examample: Lifespans, credible interval
+```{r, echo = handout, fig.height=3}
+theta <- seq(0, .03, length.out = 1000)
+plot(theta, dgamma(theta, 30, sum(ac) + 100), type = "l",
+     xlab = expression(theta), ylab = expression(paste("p(", theta, "|", x, ")")))
+abline(v = qgamma(c(0.025, 0.975), 30, sum(ac)+ 100), lty = 3)
+```
+```{r, echo = TRUE}
+qgamma(c(0.025, 0.975), 30, sum(ac) + 100)
+```
+
+
+# Choice of Prior Distribution
+
+## Conjugate Family
+
+<div class="boxed">
+**Definition:** (H & B, definition 6.5)
+A family of distributions $G$ is said to be conjunctive with respect to a likelihood function $L(\theta)=p(x|\theta)$ if $p(\theta|x)\in G$ whenever $p(\theta)\in G$.
+</div>
+
+## Jeffreys prior
+
+<div class="boxed">
+**Definition:** (H & B, definition 6.7)
+Given a likelihood $L(\theta)$, the Jeffreys prior distribution is given by
+$$
+p(\theta)\propto \sqrt{J(\theta)}.
+$$
+</div>
+
+
+## Jeffreys prior, Binomial likelihood
+
+```{r, echo = handout}
+theta <- seq(0, 1, length.out = 1000)
+plot(theta, dbeta(theta, 1/2, 1/2), type = "l",
+     xlab = expression(theta), ylab = expression(p(theta)))
+```
+
+## Vector-valued parameters
+
+- Frequentists plug in...
+
+- Bayesians integrate out:
+
+$$
+p(\theta|x)=\int p(\theta, \eta|x)\, d\eta.
+$$
+
+## Treevolumes, posterior distribution
+
+```{r, echo = handout}
+# Figure: Likelihood and log-likelihood for the tree volume regression model
+beta <- seq(1.15, 1.29, length.out = 100)
+sigma2 <- seq(0.0025, .009, length.out = 100)
+# Calculate the a posteriori probability over a matrix of parameter values
+P_tree_matrix <- outer(beta, sigma2, FUN = P_trees, data = trees2)
+# Plot the posterior
+contour(beta, sigma2, P_tree_matrix,
+        xlab = expression(beta), ylab = expression(sigma^2))
+```
+
+## Treevolumes, posterior distribution for $\beta$
+
+```{r, echo = handout}
+post.beta <- Vectorize(function(beta, data){
+  n <- nrow(data)
+  post.out <- with(data, (sum((Volume - beta * Radius^2 * Height)^2/2))^(-n/2))
+  return(post.out)
+}, vectorize.args = "beta")
+plot(beta, post.beta(beta, trees2), type = "l", xlab = expression(beta), ylab = "")
+
+```
+
+## Monte Carlo Methods
+
+- Difficult to integrate analytically.
+
+- If we can simulate from $\phi=(\theta, \eta)\sim p_\phi(\cdot|x)$, we can also simulate from $\theta\sim p_\theta(\cdot|x)$.
+
+- Difficult to simulate directly from $p_\phi(\cdot|x)$, but easy to simulate a Markov process with $p_\phi(\cdot|x)$ as the stationary distribution...
+
+## Metropolis-Hastings (Random Walk)
+
+Choose an initial value $z_0$.
+
+Repeat for $i=1, \ldots, N$:
+
+- Let $z^*=z_{i-1}+\epsilon_i$, where $\epsilon_i\sim N(0,\sigma^2)$.
+
+- If $f(z^*)/f(z_{i-1}) > u_i$, where $u_i \sim Likf[0,1]$, set $z_i = z^*$; otherwise, set $z_i = z_{i-1}$
+
+$z_1, \ldots, z_N$ now form a sample from a Markov process with stationary distribution $f$.
+
+## MH, Weibull
+
+```{r, echo = TRUE}
+post <- function(theta){L.weib(theta[1], theta[2], data = ac)}
+N <- 10000 #Number of iterations
+theta <- matrix(nrow = N, ncol = 2)
+theta[1,] <- c(1, 0.01) # Initial value
+sigma <- c(0.1, 0.001) # Step length
+for (i in 2:N){
+  theta.star <- theta[i-1,] + rnorm(2) * sigma
+  if (post(theta.star) / post(theta[i-1,]) > runif(1))
+    theta[i,] <- theta.star
+  else
+    theta[i,] <- theta[i-1,]
+}
+
+```
+
+
+## MH, Weibull
+
+```{r, echo = FALSE, fig.height=4}
+par(mfrow = c(2, 1), mar = c(1,1,1,1) + 1)
+plot(theta[,1], type = "l", ylab = "", xlab = expression(alpha))
+plot(theta[,2], type = "l", ylab = "", xlab = expression(beta))
+```
+
+## MH, Weibull
+
+```{r, echo = FALSE, fig.height=4}
+par(mfrow = c(1,2))
+hist(theta[,1], 50, xlab=expression(alpha), prob = TRUE, main = "")
+hist(theta[,2], 50, xlab=expression(beta), prob = TRUE, main = "")
+```
+
+## MH, Weibull
+
+Probability that average time between failures is larger than 100 hours:
+```{r, echo = TRUE}
+mean(1 / theta[,2] > 100)
+```
+Probability that the aggregat lasts longer than 100 hours:
+```{r, echo = TRUE}
+TT <- rweibull(N, theta[, 1], scale = 1 / theta[, 2])
+mean(TT > 100)
+```
+
+
+## MH, long steps
+
+```{r, echo = handout, warning= FALSE}
+theta[1,] <- c(1, 0.01) #start value
+sigma <- c(0.1, 0.001)*100 # step value
+for (i in 2:N){
+  theta.star <- theta[i-1,] + rnorm(2) * sigma
+  if (post(theta.star) / post(theta[i-1,]) > runif(1))
+    theta[i,] <- theta.star
+  else
+    theta[i,] <- theta[i-1,]
+}
+par(mfrow = c(2, 1), mar = c(1,1,1,1) + 1)
+plot(theta[,1], type = "l", ylab = "", xlab = expression(alpha))
+plot(theta[,2], type = "l", ylab = "", xlab = expression(beta))
+```
+
+## MH, short steps
+
+```{r, echo = handout, warning= FALSE}
+theta[1,] <- c(1, 0.01) #start value
+sigma <- c(0.1, 0.001)/100 # step value
+for (i in 2:N){
+  theta.star <- theta[i-1,] + rnorm(2) * sigma
+  if (post(theta.star) / post(theta[i-1,]) > runif(1))
+    theta[i,] <- theta.star
+  else
+    theta[i,] <- theta[i-1,]
+}
+par(mfrow = c(2, 1), mar = c(1,1,1,1) + 1)
+plot(theta[,1], type = "l", ylab = "", xlab = expression(alpha))
+plot(theta[,2], type = "l", ylab = "", xlab = expression(beta))
+```
+
+## Summary: Bayesian vs. Frequentist
+
+- As a frequentist, you don’t have to specify a prior distribution, but you often have to rely on asymptotic results.
+
+- As a Bayesian, you don’t have to refer to asymptotics, but you have to rely on your prior distribution.
